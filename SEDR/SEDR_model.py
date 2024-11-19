@@ -90,6 +90,7 @@ class Sedr:
         self.norm_value = graph_dict["norm_value"]
 
         if self.mode == 'clustering':
+            # self.model = SEDR_module(self.input_dim).to(self.device)
             self.model = SEDR_no_GCN_module(self.input_dim).to(self.device)
         elif self.mode == 'imputation':
             self.model = SEDR_impute_module(self.input_dim).to(self.device)
@@ -168,7 +169,7 @@ class Sedr:
             #     norm=self.norm_value,
             # )
             
-            loss_gcn = gcn_loss(
+            loss_gcn = gcn_loss_modified(
                 preds=self.model.dc(latent_z, self.adj_mask),
                 labels=self.adj_mask.coalesce().values(),
                 norm=self.norm_value,

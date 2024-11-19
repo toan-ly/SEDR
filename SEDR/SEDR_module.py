@@ -335,7 +335,7 @@ class SEDR_no_GCN_module(nn.Module):
             alpha=1.0,
             dec_clsuter_n=10,
     ):
-        super(SEDR_module, self).__init__()
+        super(SEDR_no_GCN_module, self).__init__()
         self.input_dim = input_dim
         self.feat_hidden1 = feat_hidden1
         self.feat_hidden2 = feat_hidden2
@@ -364,7 +364,7 @@ class SEDR_no_GCN_module(nn.Module):
         self.dc = InnerProductDecoder(self.p_drop, act=lambda x: x)
 
         # DEC cluster layer
-        self.cluster_layer = Parameter(torch.Tensor(self.dec_cluster_n, self.gcn_hidden2 + self.feat_hidden2))
+        self.cluster_layer = Parameter(torch.Tensor(self.dec_cluster_n, self.latent_dim))
         torch.nn.init.xavier_normal_(self.cluster_layer.data)
 
         #########################
