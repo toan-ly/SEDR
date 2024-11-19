@@ -49,7 +49,7 @@ def mclust_R(adata, n_clusters, use_rep='SEDR', key_added='SEDR', random_seed=20
     The parameters are the same as those in the R package mclust.
     """
     import os
-    os.environ['R_HOME'] = '/scbio4/tools/R/R-4.0.3_openblas/R-4.0.3'
+    # os.environ['R_HOME'] = '/scbio4/tools/R/R-4.0.3_openblas/R-4.0.3'
     modelNames = 'EEE'
 
     np.random.seed(random_seed)
