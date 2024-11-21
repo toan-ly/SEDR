@@ -5,7 +5,7 @@ import torch
 import torch.nn.modules.loss
 import torch.nn.functional as F
 from sklearn.cluster import KMeans
-from .SEDR_module import SEDR_module, SEDR_impute_module, SEDR_no_GCN_module
+from .SEDR_module import SEDR_module, SEDR_impute_module, SEDR_no_GCN_module, SEDR_impute_module_no_GCN
 from tqdm import tqdm
 
 
@@ -93,7 +93,7 @@ class Sedr:
             # self.model = SEDR_module(self.input_dim).to(self.device)
             self.model = SEDR_no_GCN_module(self.input_dim).to(self.device)
         elif self.mode == 'imputation':
-            self.model = SEDR_impute_module(self.input_dim).to(self.device)
+            self.model = SEDR_impute_module_no_GCN(self.input_dim).to(self.device)
         else:
             raise ValueError(f'{self.mode} is not currently supported!')
 
