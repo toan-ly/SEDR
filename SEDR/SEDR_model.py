@@ -5,7 +5,7 @@ import torch
 import torch.nn.modules.loss
 import torch.nn.functional as F
 from sklearn.cluster import KMeans
-from .SEDR_module import SEDR_module, SEDR_impute_module, SEDR_no_GCN_module, SEDR_impute_module_no_GCN
+from .SEDR_module import SEDR_module, SEDR_impute_module
 from tqdm import tqdm
 
 
@@ -48,10 +48,6 @@ def gcn_loss(preds, labels, mu, logvar, n_nodes, norm):
         1 + 2 * logvar - mu.pow(2) - logvar.exp().pow(2), 1))
     return cost + KLD
 
-def gcn_loss_modified(preds, labels, norm):
-    cost = norm * F.binary_cross_entropy_with_logits(preds, labels)
-    return cost
-
 
 class Sedr:
     def __init__(
@@ -90,10 +86,9 @@ class Sedr:
         self.norm_value = graph_dict["norm_value"]
 
         if self.mode == 'clustering':
-            # self.model = SEDR_module(self.input_dim).to(self.device)
-            self.model = SEDR_no_GCN_module(self.input_dim).to(self.device)
+            self.model = SEDR_module(self.input_dim).to(self.device)
         elif self.mode == 'imputation':
-            self.model = SEDR_impute_module_no_GCN(self.input_dim).to(self.device)
+            self.model = SEDR_impute_module(self.input_dim).to(self.device)
         else:
             raise ValueError(f'{self.mode} is not currently supported!')
 
@@ -144,8 +139,7 @@ class Sedr:
         for _ in tqdm(range(epochs)):
             self.model.train()
             self.optimizer.zero_grad()
-            # latent_z, mu, logvar, de_feat, _, feat_x, _, loss_self = self.model(self.X, self.adj_norm)
-            latent_z, de_feat, q, feat_x, gnn_z, loss_self = self.model(self.X, self.adj_norm)
+            latent_z, mu, logvar, de_feat, _, feat_x, _, loss_self = self.model(self.X, self.adj_norm)
 
             if self.mask:
                 pass
@@ -159,22 +153,15 @@ class Sedr:
                 self.mask = True
 
 
-            # loss_gcn = gcn_loss(
-            #     preds=self.model.dc(latent_z, self.adj_mask),
-            #     # labels=self.adj_label,
-            #     labels=self.adj_mask.coalesce().values(),
-            #     mu=mu,
-            #     logvar=logvar,
-            #     n_nodes=self.cell_num,
-            #     norm=self.norm_value,
-            # )
-            
-            loss_gcn = gcn_loss_modified(
+            loss_gcn = gcn_loss(
                 preds=self.model.dc(latent_z, self.adj_mask),
+                # labels=self.adj_label,
                 labels=self.adj_mask.coalesce().values(),
+                mu=mu,
+                logvar=logvar,
+                n_nodes=self.cell_num,
                 norm=self.norm_value,
             )
-
 
             loss_rec = reconstruction_loss(de_feat, self.X)
             loss = self.rec_w * loss_rec + self.gcn_w * loss_gcn + self.self_w * loss_self
@@ -205,9 +192,8 @@ class Sedr:
 
     def process(self):
         self.model.eval()
-        # latent_z, _, _, _, q, feat_x, gnn_z, _ = self.model(self.X, self.adj_norm)
-        latent_z, _, q, feat_x, gnn_z, _ = self.model(self.X, self.adj_norm)
-
+        latent_z, _, _, _, q, feat_x, gnn_z, _ = self.model(self.X, self.adj_norm)
+        
         latent_z = latent_z.data.cpu().numpy()
         q = q.data.cpu().numpy()
         feat_x = feat_x.data.cpu().numpy()
@@ -217,9 +203,7 @@ class Sedr:
 
     def recon(self):
         self.model.eval()
-        # latent_z, _, _, de_feat, q, feat_x, gnn_z, _ = self.model(self.X, self.adj_norm)
-        latent_z, de_feat, q, feat_x, gnn_z, _ = self.model(self.X, self.adj_norm)
-
+        latent_z, _, _, de_feat, q, feat_x, gnn_z, _ = self.model(self.X, self.adj_norm)
         de_feat = de_feat.data.cpu().numpy()
 
         # revise std and mean
@@ -268,9 +252,7 @@ class Sedr:
             # training model
             torch.set_grad_enabled(True)
             self.optimizer.zero_grad()
-            # latent_z, mu, logvar, de_feat, out_q, _, _, _ = self.model(self.X, self.adj_norm)
-            latent_z, de_feat, out_q, _, _, _ = self.model(self.X, self.adj_norm)
-
+            latent_z, mu, logvar, de_feat, out_q, _, _, _ = self.model(self.X, self.adj_norm)
 
             # if self.mask:
             #     pass
@@ -279,28 +261,18 @@ class Sedr:
             #     self.adj_mask = adj_mask
             #     self.mask = True
 
-            # loss_gcn = gcn_loss(
-            #     preds=self.model.dc(latent_z, self.adj_mask),
-            #     labels=self.adj_mask.coalesce().values(),
-            #     mu=mu,
-            #     logvar=logvar,
-            #     n_nodes=self.cell_num,
-            #     norm=self.norm_value,
-            #     # mask=adj_mask,
-            # )
-            
-            loss_gcn = gcn_loss_modified(
+            loss_gcn = gcn_loss(
                 preds=self.model.dc(latent_z, self.adj_mask),
                 labels=self.adj_mask.coalesce().values(),
+                mu=mu,
+                logvar=logvar,
+                n_nodes=self.cell_num,
                 norm=self.norm_value,
+                # mask=adj_mask,
             )
-            
             loss_rec = reconstruction_loss(de_feat, self.X)
             # clustering KL loss
             loss_kl = F.kl_div(out_q.log(), torch.tensor(tmp_p).to(self.device)).to(self.device)
             loss = self.gcn_w * loss_gcn + self.dec_kl_w * loss_kl + self.rec_w * loss_rec
             loss.backward()
             self.optimizer.step()
-
-
-
