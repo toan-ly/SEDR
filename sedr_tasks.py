@@ -31,7 +31,9 @@ Image.MAX_IMAGE_PIXELS = None
 
 RANDOM_SEED = 2023
 SEDR.fix_seed(RANDOM_SEED)
-DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+DEVICE = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {DEVICE}")
+
 
 # Directories for results
 EXP_DIR = Path("./results")
@@ -74,11 +76,11 @@ def preprocess_adata(adata, task_type):
 
     return adata, graph_dict
 
-def train_model(adata, graph_dict, task_type, use_dec=True, device="cuda:0"):
+def train_model(adata, graph_dict, task_type, device, use_dec=True):
     """Train the SEDR model"""
     print(f'Training the model for {task_type}...')
     if task_type == "imputation":
-        model = SEDR.Sedr(adata.X, graph_dict, mode='imputation')
+        model = SEDR.Sedr(adata.X, graph_dict, mode='imputation', device=device)
     else:
         model = SEDR.Sedr(adata.obsm["X_pca"], graph_dict, device=device)
     
@@ -141,7 +143,6 @@ def visualize_clustering(adata, task_dir, save_fig=False):
     if save_fig:
         plt.savefig(task_dir / "silhouette.png")
     plt.close()    
-
 
 def visualize_imputation(adata, task_dir, save_fig=False):
     """Visualize Task 2 - Imputation"""
@@ -256,7 +257,7 @@ def visualize_batch_integration(adata, task_dir, save_fig=False):
     sc.tl.umap(adata)
     
     fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-    sc.pl.umap(adata, color=["layer_guess", "batch_name"], ax=axes, show=False)
+    sc.pl.umap(adata, color=["layer_guess", "batch_name"], show=False)
     plt.tight_layout()
     
     if save_fig:
@@ -279,7 +280,7 @@ def visualize_batch_integration(adata, task_dir, save_fig=False):
         'type': ['CLISI']*len(CLISI)
     })
 
-    # Save the results
+    # Save LISI scores
     df_ILISI.to_csv(task_dir / "ILISI.csv", index=False)
     df_CLISI.to_csv(task_dir / "CLISI.csv", index=False)
 
@@ -297,17 +298,6 @@ def visualize_batch_integration(adata, task_dir, save_fig=False):
     plt.close()
     
 def visualize_stereo_seq(adata, task_dir, save_fig=False):
-    adata.obs['total_exp'] = adata.X.sum(axis=1)
-    n_clusters = 10
-    
-    fig, ax = plt.subplots()
-    sc.pl.spatial(adata, color='total_exp', spot_size=40, show=False, ax=ax)
-    ax.invert_yaxis()
-    plt.tight_layout()
-    if save_fig:
-        plt.savefig(task_dir / "total_exp.png")
-    plt.close()
-
     fig, ax = plt.subplots(1,1,figsize=(4*1,3))
     sc.pl.spatial(adata, color='SEDR', spot_size=40, show=False, ax=ax)
     ax.invert_yaxis()
@@ -317,6 +307,7 @@ def visualize_stereo_seq(adata, task_dir, save_fig=False):
     plt.close()
         
     # Each cluster
+    n_clusters = 10
     fig, axes = plt.subplots(2,5,figsize=(1.7*5, 1.5*2), sharex=True, sharey=True)
     axes = axes.ravel()
 
@@ -385,7 +376,7 @@ def run_imputation():
     adata.var_names_make_unique()
 
     # Preprocessing
-    adata, graph_dict = preprocess_adata(adata)
+    adata, graph_dict = preprocess_adata(adata, 'imputation')
     
     # Training
     _, adata = train_model(adata, graph_dict, 'imputation', use_dec=True, device=DEVICE)
@@ -427,7 +418,7 @@ def run_batch_integration():
             name = name + '_' + proj_name
 
     # Preprocessing
-    adata, graph_dict = preprocess_adata(adata)
+    adata, graph_dict = preprocess_adata(adata, 'batch_integration')
 
     # Training
     _, adata = train_model(adata, graph_dict, 'batch_integration', use_dec=False, device=DEVICE)
@@ -448,7 +439,7 @@ def run_batch_integration():
     
 def run_stereo_seq():
     # Loading data
-    data_root = Path('./data/Stereo-seq/Dataset1_LiuLongQi_MouseOlfactoryBulb')
+    data_root = Path('./data/Stero-seq/Dataset1_LiuLongQi_MouseOlfactoryBulb')
     
     if not os.path.exists(data_root / 'raw.h5ad'):
         counts = pd.read_csv(data_root / 'RNA_counts.tsv.gz', sep='\t', index_col=0).T
@@ -467,10 +458,16 @@ def run_stereo_seq():
     else:
         adata = sc.read_h5ad( data_root / 'raw.h5ad')
     
+    # Plot before preprocessing
     adata.obs['total_exp'] = adata.X.sum(axis=1)
+    fig, ax = plt.subplots()
+    sc.pl.spatial(adata, color='total_exp', spot_size=40, show=False, ax=ax)
+    ax.invert_yaxis()
+    plt.tight_layout()
+    plt.savefig(task_dir / "total_exp.png")
     
     # Preprocessing
-    adata, graph_dict = preprocess_adata(adata)
+    adata, graph_dict = preprocess_adata(adata, 'stereo_seq')
 
     # Training
     _, adata = train_model(adata, graph_dict, 'stereo_seq', use_dec=True, device=DEVICE)
@@ -484,8 +481,8 @@ def run_stereo_seq():
 if __name__ == "__main__":
     run_clustering()
     run_imputation()
-    run_stereo_seq() 
     run_batch_integration()
+    run_stereo_seq() 
 
 
         
