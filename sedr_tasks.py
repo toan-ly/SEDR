@@ -17,21 +17,23 @@ from tqdm import tqdm
 import harmonypy as hm
 
 from sklearn import metrics
+from sklearn.metrics import silhouette_score
 from sklearn.decomposition import PCA
 from skimage.io import imread
 from scipy.sparse import csr_matrix
+
 from PIL import Image
+import SEDR 
 
-import SEDR # Import model
-
+# Suppress warnings and set global configurations
 warnings.filterwarnings('ignore')
 Image.MAX_IMAGE_PIXELS = None
 
-random_seed = 2023
-# SEDR.fix_seed(random_seed)
-torch.manual_seed(random_seed)
-device = 'cuda:0' if torch.cuda.is_available() else 'cpu'
+RANDOM_SEED = 2023
+SEDR.fix_seed(RANDOM_SEED)
+DEVICE = 'cuda:0' if torch.cuda.is_available() else 'cpu'
 
+# Directories for results
 EXP_DIR = Path("./results")
 TASK_DIRS = {
     "clustering": EXP_DIR / "Task1_Clustering",
@@ -43,49 +45,62 @@ for task_dir in TASK_DIRS.values():
     task_dir.mkdir(parents=True, exist_ok=True)
 
 def get_sub(adata):
-    sub_adata = adata[
+    return adata[
         (adata.obs['array_row'] < 33) &
         (adata.obs['array_row'] > 15) &
         (adata.obs['array_col'] < 78) &
         (adata.obs['array_col'] > 48)
     ]
-    return sub_adata
 
-def preprocess_adata(input_path):
-    adata = sc.read_visium(input_path)
-    adata.var_names_make_unique()
+def preprocess_adata(adata, task_type):
+    """Preprocess the AnnData object"""
     adata.layers["count"] = adata.X.toarray()
-
-    # Basic preprocessing
-    sc.pp.filter_genes(adata, min_cells=50)
-    sc.pp.filter_genes(adata, min_counts=10)
+    if task_type != 'stereo_seq':
+        sc.pp.filter_genes(adata, min_cells=50)
+        sc.pp.filter_genes(adata, min_counts=10)
     sc.pp.normalize_total(adata, target_sum=1e6)
-    sc.pp.highly_variable_genes(adata, flavor="seurat_v3", layer="count", n_top_genes=2000)
-    adata = adata[:, adata.var["highly_variable"] == True]
+    if task_type != 'stereo_seq':
+        sc.pp.highly_variable_genes(adata, flavor="seurat_v3", layer="count", n_top_genes=2000)
+        adata = adata[:, adata.var["highly_variable"] == True]
     sc.pp.scale(adata)
 
     # Dimension reduction
-    adata.obsm["X_pca"] = PCA(n_components=200, random_state=random_seed).fit_transform(adata.X)
+    adata.obsm["X_pca"] = PCA(n_components=200, random_state=RANDOM_SEED).fit_transform(adata.X)
+    
+    if task_type != 'stereo_seq':
+        graph_dict = SEDR.graph_construction(adata, 12)
+    else:
+        graph_dict = SEDR.graph_construction(adata, 6)
 
-    return adata
+    return adata, graph_dict
 
-def train_model(input_path, output_dir, task_type, model_params):
-    adata = preprocess_adata(input_path)
-
-    model = SEDR()
+def train_model(adata, graph_dict, task_type, use_dec=True, device="cuda:0"):
+    """Train the SEDR model"""
     print(f'Training the model for {task_type}...')
-    model.fit(adata.obsm["X_pca"]) 
-    
-    adata.obsm["SEDR"] = model.get_latent_features()
     if task_type == "imputation":
-        adata.obsm["de_feat"] = model.get_reconstructed_features()
+        model = SEDR.Sedr(adata.X, graph_dict, mode='imputation')
+    else:
+        model = SEDR.Sedr(adata.obsm["X_pca"], graph_dict, device=device)
     
-    return adata
+    if use_dec:
+        model.train_with_dec()
+    else:
+        model.train_without_dec()
+    sedr_feat, _, _, _ = model.process()
+    adata.obsm["SEDR"] = sedr_feat
+    
+    if task_type == "imputation":
+        adata.obsm["de_feat"] = model.recon()
+    
+    print(f'Training completed for {task_type}!')
+    return model, adata
 
 def visualize_clustering(adata, task_dir, save_fig=False):
+    """Visualize Task 1 - Clustering"""
     sub_adata = adata[~pd.isnull(adata.obs["layer_guess"])]
     ARI = metrics.adjusted_rand_score(sub_adata.obs["layer_guess"], sub_adata.obs["SEDR"])
 
+    # Plot spatial clustering
     fig, axes = plt.subplots(1, 2, figsize=(8, 4))
     sc.pl.spatial(adata, color="layer_guess", ax=axes[0], show=False)
     sc.pl.spatial(adata, color="SEDR", ax=axes[1], show=False)
@@ -97,7 +112,40 @@ def visualize_clustering(adata, task_dir, save_fig=False):
         plt.savefig(task_dir / "spatial_clustering.png")
     plt.close()
 
+    # Plot UMAP
+    sc.pp.neighbors(adata, use_rep='SEDR', metric='cosine')
+    sc.tl.umap(adata)
+
+    fig, axes = plt.subplots(1, 2, figsize=(8, 3))
+    sc.pl.umap(adata, color='layer_guess', ax=axes[0], show=False)
+    sc.pl.umap(adata, color='SEDR', ax=axes[1], show=False)
+    axes[0].set_title('Manual Annotation')
+    axes[1].set_title('Clustering')
+
+    for ax in axes:
+        ax.set_aspect(1)
+
+    plt.tight_layout()
+    if save_fig:
+        plt.savefig(task_dir / "umap.png")
+    plt.close()
+    
+    # Plot silhouette score
+    sil_score = silhouette_score(adata.obsm['SEDR'], adata.obs['SEDR'])
+    fig, ax = plt.subplots(figsize=(8, 5))
+    sns.histplot(adata.obs['SEDR'], bins=30, ax=ax)
+    ax.set_title(f'Silhouette Score: {sil_score:.4f}')
+    ax.set_xlabel('Cluster')
+    ax.set_ylabel('Silhouette Score')
+    plt.tight_layout()
+    if save_fig:
+        plt.savefig(task_dir / "silhouette.png")
+    plt.close()    
+
+
 def visualize_imputation(adata, task_dir, save_fig=False):
+    """Visualize Task 2 - Imputation"""
+    # Plot IGHD and 3 genes with high correlation
     newcmp = LinearSegmentedColormap.from_list('new', ['#EEEEEE','#009900'], N=1000)
     genes = ["IGHD", "MS4A1", "CD1C", "CD3D"]
     for gene in genes:
@@ -125,6 +173,7 @@ def visualize_imputation(adata, task_dir, save_fig=False):
         plt.savefig(task_dir / "imputation_genes.png")
     plt.close()
     
+    # Plot pearson correlation
     list_idx = []
     for gene in genes:
         list_idx.append(adata.var.index.tolist().index(gene))
@@ -142,6 +191,7 @@ def visualize_imputation(adata, task_dir, save_fig=False):
     ]
 
     df_results = pd.DataFrame(data=results, columns=['method','gene','corr'])
+    df_results.to_csv(task_dir / "correlation.csv", index=False)
 
     fig, ax = plt.subplots(figsize=(5,4))
     sns.barplot(data=df_results, x='method', y='corr', hue='gene', order=['raw','SEDR'], palette='Set1')
@@ -158,6 +208,7 @@ def visualize_imputation(adata, task_dir, save_fig=False):
         plt.savefig(task_dir / "correlation.png")
     plt.close()
     
+    # Plot marker genes for GCs
     list_genes = ['BCL6','FCER2','EGR1']
 
     for gene in list_genes:
@@ -167,7 +218,7 @@ def visualize_imputation(adata, task_dir, save_fig=False):
     newcmp = LinearSegmentedColormap.from_list('new', ['#EEEEEE','#009900'], N=1000)
     fig, axes = plt.subplots(3,2,figsize=(3*2,3*3))
     _ = 0
-    for gene in ['BCL6', 'FCER2','EGR1']:
+    for gene in list_genes:
         i = adata.var.index.tolist().index(gene)
 
         adata.var['mean_exp'] = adata.X.mean(axis=0)
@@ -199,16 +250,8 @@ def visualize_imputation(adata, task_dir, save_fig=False):
     plt.close()
     
 def visualize_batch_integration(adata, task_dir, save_fig=False):
-    meta_data = adata.obs[['batch']]
-
-    data_mat = adata.obsm['SEDR']
-    vars_use = ['batch']
-    ho = hm.run_harmony(data_mat, meta_data, vars_use)
-
-    res = pd.DataFrame(ho.Z_corr).T
-    res_df = pd.DataFrame(data=res.values, columns=['X{}'.format(i+1) for i in range(res.shape[1])], index=adata.obs.index)
-    adata.obsm[f'SEDR.Harmony'] = res_df
-    
+    """Visualize Task 3 - Batch Integration"""
+    # Plot UMAP
     sc.pp.neighbors(adata, use_rep="SEDR.Harmony", metric="cosine")
     sc.tl.umap(adata)
     
@@ -220,6 +263,7 @@ def visualize_batch_integration(adata, task_dir, save_fig=False):
         plt.savefig(task_dir / "umap_batch_integration.png")
     plt.close()
 
+    # Plot LISI scores
     ILISI = hm.compute_lisi(adata.obsm['SEDR.Harmony'], adata.obs[['batch']], label_colnames=['batch'])[:, 0]
     CLISI = hm.compute_lisi(adata.obsm['SEDR.Harmony'], adata.obs[['layer_guess']], label_colnames=['layer_guess'])[:, 0]
 
@@ -229,12 +273,15 @@ def visualize_batch_integration(adata, task_dir, save_fig=False):
         'type': ['ILISI']*len(ILISI)
     })
 
-
     df_CLISI = pd.DataFrame({
         'method': 'SEDR',
         'value': CLISI,
         'type': ['CLISI']*len(CLISI)
     })
+
+    # Save the results
+    df_ILISI.to_csv(task_dir / "ILISI.csv", index=False)
+    df_CLISI.to_csv(task_dir / "CLISI.csv", index=False)
 
     fig, axes = plt.subplots(1, 2, figsize=(4, 5))
     sns.boxplot(data=df_ILISI, x='method', y='value', ax=axes[0])
@@ -250,15 +297,26 @@ def visualize_batch_integration(adata, task_dir, save_fig=False):
     plt.close()
     
 def visualize_stereo_seq(adata, task_dir, save_fig=False):
+    adata.obs['total_exp'] = adata.X.sum(axis=1)
     n_clusters = 10
+    
+    fig, ax = plt.subplots()
+    sc.pl.spatial(adata, color='total_exp', spot_size=40, show=False, ax=ax)
+    ax.invert_yaxis()
+    plt.tight_layout()
+    if save_fig:
+        plt.savefig(task_dir / "total_exp.png")
+    plt.close()
+
     fig, ax = plt.subplots(1,1,figsize=(4*1,3))
     sc.pl.spatial(adata, color='SEDR', spot_size=40, show=False, ax=ax)
     ax.invert_yaxis()
     plt.tight_layout()
     if save_fig:
-        plt.savefig(task_dir / "stereo_seq_clusters.png")
+        plt.savefig(task_dir / "spatial_clusters.png")
     plt.close()
-    
+        
+    # Each cluster
     fig, axes = plt.subplots(2,5,figsize=(1.7*5, 1.5*2), sharex=True, sharey=True)
     axes = axes.ravel()
 
@@ -298,26 +356,136 @@ def visualize_results(adata, task_type, task_dir, save_fig=False):
     elif task_type == "stereo_seq":
         visualize_stereo_seq(adata, task_dir, save_fig)
         
+def run_clustering():
+    data_root = Path('./data/DLPFC')
+    sample_name = '151673'
+    n_clusters = 5 if sample_name in ['151669', '151670', '151671', '151672'] else 7
+
+    # Loading data
+    adata = sc.read_visium(data_root / sample_name)
+    adata.var_names_make_unique()
+    df_meta = pd.read_csv(data_root / sample_name / 'metadata.tsv', sep='\t')
+    adata.obs['layer_guess'] = df_meta['layer_guess']
+    
+    # Preprocessing
+    adata, graph_dict = preprocess_adata(adata, 'clustering')
+
+    # Training
+    _, adata = train_model(adata, graph_dict, 'clustering', use_dec=True, device=DEVICE)
+    
+    # Evaluation and visualization
+    SEDR.mclust_R(adata, n_clusters, use_rep='SEDR', key_added='SEDR')
+    visualize_results(adata, 'clustering', TASK_DIRS['clustering'], save_fig=True)
+    
+def run_imputation():
+    data_root = Path('./data/Human_Lymph_Node/')
+    
+    # Loading data
+    adata = sc.read_visium(data_root)
+    adata.var_names_make_unique()
+
+    # Preprocessing
+    adata, graph_dict = preprocess_adata(adata)
+    
+    # Training
+    _, adata = train_model(adata, graph_dict, 'imputation', use_dec=True, device=DEVICE)
+    
+    # Evaluation and visualization
+    visualize_results(adata, 'imputation', TASK_DIRS['imputation'], save_fig=True)
+    
+def run_batch_integration():
+    data_root = Path('./data/DLPFC/')
+    proj_list = ['151673', '151674', '151675']
+    
+    # Combining datasets
+    for proj_name in tqdm(proj_list):
+        adata_tmp = sc.read_visium(data_root / proj_name)
+        adata_tmp.var_names_make_unique()
+
+        adata_tmp.obs['batch_name'] = proj_name
+
+        ##### Load layer_guess label, if have
+        df_label = pd.read_csv(data_root / proj_name / 'metadata.tsv', sep='\t')
+        adata_tmp.obs['layer_guess'] = df_label['layer_guess']
+        adata_tmp= adata_tmp[~pd.isnull(adata_tmp.obs['layer_guess'])]
+
+        graph_dict_tmp = SEDR.graph_construction(adata_tmp, 12)
+
+        if proj_name == proj_list[0]:
+            adata = adata_tmp
+            graph_dict = graph_dict_tmp
+            name = proj_name
+            adata.obs['proj_name'] = proj_name
+        else:
+            var_names = adata.var_names.intersection(adata_tmp.var_names)
+            adata = adata[:, var_names]
+            adata_tmp = adata_tmp[:, var_names]
+            adata_tmp.obs['proj_name'] = proj_name
+
+            adata = adata.concatenate(adata_tmp)
+            graph_dict = SEDR.combine_graph_dict(graph_dict, graph_dict_tmp)
+            name = name + '_' + proj_name
+
+    # Preprocessing
+    adata, graph_dict = preprocess_adata(adata)
+
+    # Training
+    _, adata = train_model(adata, graph_dict, 'batch_integration', use_dec=False, device=DEVICE)
+    
+    # Use harmony to calculate revised PCs
+    meta_data = adata.obs[['batch']]
+
+    data_mat = adata.obsm['SEDR']
+    vars_use = ['batch']
+    ho = hm.run_harmony(data_mat, meta_data, vars_use)
+
+    res = pd.DataFrame(ho.Z_corr).T
+    res_df = pd.DataFrame(data=res.values, columns=['X{}'.format(i+1) for i in range(res.shape[1])], index=adata.obs.index)
+    adata.obsm[f'SEDR.Harmony'] = res_df
+    
+    # Evaluation and visualization
+    visualize_results(adata, 'batch_integration', TASK_DIRS['batch_integration'], save_fig=True)
+    
+def run_stereo_seq():
+    # Loading data
+    data_root = Path('./data/Stereo-seq/Dataset1_LiuLongQi_MouseOlfactoryBulb')
+    
+    if not os.path.exists(data_root / 'raw.h5ad'):
+        counts = pd.read_csv(data_root / 'RNA_counts.tsv.gz', sep='\t', index_col=0).T
+        counts.index = [f'Spot_{i}' for i in counts.index]
+        adata = sc.AnnData(counts)
+        adata.X = csr_matrix(adata.X, dtype=np.float32)
+
+        df_pos = pd.read_csv(data_root / 'position.tsv', sep='\t')
+        adata.obsm['spatial'] = df_pos[['y','x']].values
+
+        used_barcode = pd.read_csv(os.path.join(data_root / 'used_barcodes.txt'), sep='\t', header=None)
+        used_barcode = used_barcode[0]
+        adata = adata[used_barcode,]
+
+        adata.write( data_root / 'raw.h5ad')
+    else:
+        adata = sc.read_h5ad( data_root / 'raw.h5ad')
+    
+    adata.obs['total_exp'] = adata.X.sum(axis=1)
+    
+    # Preprocessing
+    adata, graph_dict = preprocess_adata(adata)
+
+    # Training
+    _, adata = train_model(adata, graph_dict, 'stereo_seq', use_dec=True, device=DEVICE)
+    
+    # Evaluation and visualization
+    n_clusters = 10
+    SEDR.mclust_R(adata, n_clusters, use_rep='SEDR', key_added='SEDR')
+    visualize_results(adata, 'stereo_seq', TASK_DIRS['stereo_seq'], save_fig=True)
+    
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run experiments")
-    parser.add_argument("--task",
-                        type=str, 
-                        required=False,
-                        choices=["clustering", "imputation", "batch_integration", "stereo_seq"],
-                        help="Task to perform.")
-    parser.add_argument("--data", 
-                        type=str, 
-                        required=True,
-                        help="Path to the data file.")
-    args = parser.parse_args()
+    run_clustering()
+    run_imputation()
+    run_stereo_seq() 
+    run_batch_integration()
 
-    if args.task is None:
-        for task in TASK_DIRS.keys():
-            adata = train_model(args.data, TASK_DIRS[task], task, {})
-            visualize_results(adata, task, TASK_DIRS[task], save_fig=True)
-    else:
-        adata = train_model(args.data, TASK_DIRS[args.task], args.task, {})
-        visualize_results(adata, args.task, TASK_DIRS[args.task], save_fig=True)
-   
+
         
