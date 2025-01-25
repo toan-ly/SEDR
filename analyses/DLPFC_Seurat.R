@@ -11,9 +11,8 @@ library(dplyr)
 options(bitmapType = 'cairo')
 
 
-dir.input <- file.path('./data/DLPFC/', sample.name)
-dir.output <- file.path('./output/DLPFC/', sample.name, '/Seurat/')
-
+dir.input <- file.path('./data/DLPFC_new/', sample.name)
+dir.output <- file.path('./results/Seurat/DLPFC', sample.name)
 if(!dir.exists(file.path(dir.output))){
   dir.create(file.path(dir.output), recursive = TRUE)
 }
