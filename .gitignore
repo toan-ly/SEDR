@@ -1,4 +1,7 @@
 .DS_Store
+.Rhistory
+SEDR.Rproj
+results
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -168,3 +171,4 @@ cython_debug/
 #.idea/
 
 results
+.Rproj.user

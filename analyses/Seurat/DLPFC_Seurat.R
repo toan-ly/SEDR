@@ -1,6 +1,6 @@
 args = commandArgs(trailingOnly=TRUE)
-sample.name <- args[1]
-n_clusters <- args[2]
+sample.name <- '151673'
+n_clusters <- 7
 
 
 library(Seurat)
@@ -35,7 +35,6 @@ ggsave(file.path(dir.output, './Seurat.QC.png'), width = 10, height=5)
 # sctransform
 sp_data <- SCTransform(sp_data, assay = "Spatial", verbose = FALSE)
 
-
 ### Dimensionality reduction, clustering, and visualization
 sp_data <- RunPCA(sp_data, assay = "SCT", verbose = FALSE, npcs = 50)
 sp_data <- FindNeighbors(sp_data, reduction = "pca", dims = 1:30)
@@ -66,4 +65,8 @@ write.table(sp_data@meta.data, file = file.path(dir.output, './metadata.tsv'), s
 ##### 
 library(mclust)
 
+
 print(adjustedRandIndex(sp_data@meta.data$layer_guess, sp_data@meta.data$seurat_clusters))
+
+# Calculate ami, homogeneity, completeness, v-measure
+print(adjustMutualInformation(sp_data@meta.data$layer_guess, sp_data@meta.data$seurat_clusters))
