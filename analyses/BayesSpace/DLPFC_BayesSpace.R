@@ -1,12 +1,12 @@
 args = commandArgs(trailingOnly=TRUE)
-sample.name <- args[1]
-n_clusters <- as.numeric(args[2])
+sample.name <- '151673'
+n_clusters <- 7
 
 library(BayesSpace)
 library(ggplot2)
 
-dir.input <- file.path('./data/DLPFC/', sample.name)
-dir.output <- file.path('./output/DLPFC/', sample.name, '/BayesSpace/')
+dir.input <- file.path('./data/DLPFC_new/', sample.name)
+dir.output <- file.path('./results/BayesSpace/DLPFC/', sample.name)
 
 if(!dir.exists(file.path(dir.output))){
   dir.create(file.path(dir.output), recursive = TRUE)
