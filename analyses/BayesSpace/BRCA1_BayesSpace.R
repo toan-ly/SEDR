@@ -7,67 +7,34 @@ library(aricode)
 library(clevr)  # For homogeneity, completeness, v-measure
 
 batch_cluster_map <- list(
-  # '151669' = 5, '151670' = 5, '151671' = 5, '151672' = 5,
-  '151673' = 7, '151674' = 7, '151675' = 7, '151676' = 7,
-  '151507' = 7, '151508' = 7, '151509' = 7, '151510' = 7
+  'V1_Human_Breast_Cancer_Block_A_Section_1' = 20
 )
 
-# Function to calculate entropy metrics
-calculate_metrics <- function(ground_truth, clusters) {
-  tryCatch({
-    # Remove NA values
-    valid_indices <- !is.na(clusters) & !is.na(ground_truth)
-    clusters <- clusters[valid_indices]
-    ground_truth <- ground_truth[valid_indices]
-
-    if (length(ground_truth) != length(clusters)) {
-      stop("Mismatch in length between ground_truth and clusters.")
-    }
-    if (any(is.na(ground_truth)) || any(is.na(clusters))) {
-      stop("Missing values found in ground_truth or clusters.")
-    }
-
-    # # Convert to factors
-    # ground_truth <- as.factor(ground_truth)
-    # clusters <- as.factor(clusters)
-
-    ARI <- adjustedRandIndex(ground_truth, clusters)
-    AMI <- AMI(ground_truth, clusters)
-    homogeneity <- clevr::homogeneity(ground_truth, clusters)
-    completeness <- clevr::completeness(ground_truth, clusters)
-    v_measure <- clevr::v_measure(ground_truth, clusters)
-    return(list(ARI = ARI, AMI = AMI, Homogeneity = homogeneity, Completeness = completeness, V_Measure = v_measure))
-  }, error = function(e) {
-    warning("Error calculating metrics: ", e$message)
-    return(list(ARI = NA, AMI = NA, Homogeneity = NA, Completeness = NA, V_Measure = NA))
-  })
-}
-
-
-data_path <- file.path("./data/DLPFC_new")
-save_path <- file.path("./results/BayesSpace/DLPFC")
+data_path <- file.path("./data/BRCA1")
+save_path <- file.path("./results/BayesSpace/BRCA1")
 
 for (sample.name in names(batch_cluster_map)) {
   cat("Processing batch:", sample.name, "\n")
   n_clusters <- batch_cluster_map[[sample.name]]
 
   dir.input <- file.path(data_path, sample.name)
-  dir.output <- file.path(save_path, sample.name)
-
+  dir.output <- file.path(save_path)
   if(!dir.exists(file.path(dir.output))){
     dir.create(file.path(dir.output), recursive = TRUE)
   }
 
-  dlpfc <- getRDS("2020_maynard_prefrontal-cortex", sample.name)
+#   dlpfc <- getRDS("2020_maynard_prefrontal-cortex", sample.name)
   ### load data
-  # dlpfc <- readVisium(dir.input) 
-  dlpfc_temp <- read10Xh5(dir.input)
-  dlpfc_temp <- dlpfc_temp[, match(colnames(dlpfc), colnames(dlpfc_temp))]
+#   dlpfc <- readVisium(dir.input) 
+  dlpfc <- read10Xh5(dir.input)
+  dlpfc <- scuttle::logNormCounts(dlpfc)
+
+#   dlpfc_temp <- dlpfc_temp[, match(colnames(dlpfc), colnames(dlpfc_temp))]
 
   # Match barcodes
-  match_idx <- match(dlpfc_temp$barcode, dlpfc$barcode)
-  dlpfc$pxl_col_in_fullres <- dlpfc_temp$pxl_col_in_fullres[match_idx]
-  dlpfc$pxl_row_in_fullres <- dlpfc_temp$pxl_row_in_fullres[match_idx]
+#   match_idx <- match(dlpfc_temp$barcode, dlpfc$barcode)
+#   dlpfc$pxl_col_in_fullres <- dlpfc_temp$pxl_col_in_fullres[match_idx]
+#   dlpfc$pxl_row_in_fullres <- dlpfc_temp$pxl_row_in_fullres[match_idx]
 
   # dlpfc <- scuttle::logNormCounts(dlpfc)
   # dlpfc <- Load10X_Spatial(dir.input, filename = "filtered_feature_bc_matrix.h5")
@@ -94,26 +61,14 @@ for (sample.name in names(batch_cluster_map)) {
 
 
   labels <- dlpfc$spatial.cluster
-  # labels <- dplyr::recode(dlpfc$spatial.cluster, 3, 4, 5, 6, 2, 7, 1)
-  gt <- dlpfc$layer_guess
-  metrics <- calculate_metrics(gt, labels)
-  cat("ARI for batch", sample.name, ":", metrics$ARI, "\n")
-
-  cluster_results <- data.frame(ARI = metrics$ARI,
-                                AMI = metrics$AMI,
-                                Homogeneity = metrics$Homogeneity,
-                                Completeness = metrics$Completeness,
-                                V_Measure = metrics$V_Measure)
-  write.table(cluster_results, file = file.path(dir.output, 'clustering_results.tsv'), sep = '\t', quote = FALSE, row.names = FALSE)
   
   ## View results
   clusterPlot(dlpfc, label=labels, palette=NULL, size=0.05) +
-    scale_fill_viridis_d(option = "A", labels = 1:7) +
-    labs(title=paste("ARI =", round(metrics$ARI, 2))) +
-    # theme_minimal() +
+    scale_fill_viridis_d(option = "A", labels = 1:20) +
+    labs(title="BayesSpace") +
     theme(plot.title = element_text(hjust = 0.5, size = 16))
 
-  ggsave(file.path(dir.output, 'spatial_clustering.png'), width=5, height=5)
+  ggsave(file.path(dir.output, 'spatial_clustering.png'), width=5)
  
   ##### save data
   write.table(reducedDim(dlpfc, "PCA"), 

@@ -126,7 +126,7 @@ for (sample.name in names(batch_cluster_map)) {
   gt <- sp_data@meta.data$layer_guess
   pred <- sp_data@meta.data$seurat_clusters
   clustering_results <- calculate_metrics(gt, pred)
-  cat("ARI for batch", sample.name, ":", ari, "\n")
+  cat("ARI for batch", sample.name, ":", clustering_results$ARI, "\n")
 
   metrics <- data.frame(ARI = clustering_results$ARI, 
                         AMI = clustering_results$AMI,
